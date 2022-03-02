@@ -1,0 +1,7 @@
+1.先cas 基础base值
+2.若cas基础base值失败
+    1.Cells槽不存在，caseCellsBusy加锁进行初始化槽数为2，并设置当前线程的Cell的槽值
+    2.Cells槽存在，但线程对应的Cell不存在，创建线程的Cell槽，加锁，若当前线程对应的Cell槽为空，这在Cell中设置当前线程的cell槽
+    3.Cells槽存在，线程对应的Cell也存在，cas 当前线程的Cell槽值
+    4.Cells槽存在，对应的Cell也存在，但cas失败且并发数大于cpu核数时，改变当前线程的Cell槽，重新插入
+    5.Cells槽存在，cell也存在，且未超过cpu核数，发现Cells槽数不够时，cas加锁扩展槽数
