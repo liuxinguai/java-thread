@@ -1,0 +1,85 @@
+#独占锁不允许被中断
+1. acquire()
+   1. 先通过模板tryAcquire()尝试获取锁
+   2. tryAcquire返回false，有多线程竞争锁，此时竞争锁失败的线程需要休眠
+   3. addWaiter(Node.EXCLUSIVE)将当前需要休眠的线程加入到休眠双向链表中
+      1. addWaiter(Node.EXCLUSIVE)采用尾插入法，且返回尾节点
+      2. 且移除队列是采用头部移除的方式
+   4. acquireQueued
+      1. 先判断当前节点的prev节点是否为head节点
+      2. 若为head&&tryAcquire()获取锁成功，这样设计的目的有可能获得前一个获得锁的线程此时已经释放锁，获取锁成功，移除头部节点，并将当前节点设置为头部节点
+      3. 不为head节点或为（prev==head但是锁还没被前一个线程释放）调用shouldParkAfterFailedAcquire
+         1. prev.waitStatus==-1:表示后续的一个节点需要被休眠，放回true
+         2. prev.waitStatus > 0(prev.waitStatus == 1)：表示上一个节点是取消的节点，此时需要将这种节点从链表中移除,放回false
+         3. prev.waitStatus==0:CAS设置prev.waitStatus==-1,返回false
+      4. shouldParkAfterFailedAcquire返回false重复调用步骤4.1
+         1. 确保当前节点的prev.waitStatus=-1且prev.next=当前节点，(此处需要过滤掉那些被取消的节点)
+      5. shouldParkAfterFailedAcquire返回true，调用parkAndCheckInterrupt休眠线程
+      6. 调用parkAndCheckInterrupt进入休眠
+         1. LockSuport.park(currentThread)休眠当前线程,终止当前线程的休眠如下两种方式：
+            1. LockSuport.unpark(currentThread)
+            2. currentThread.interrupted()
+         2. 调用Thread.interrupted()返回当前线程中断标志位，且清空当前线程的中断标志位
+      7. 当parkAndCheckInterrupt休眠结束，且线程的中断标志位位false
+         1. 调用LockSuport.unpark让线程退出的休眠，重复步骤4.1步骤，走到步骤4.2时，就会发现条件成立，即该线程获取到了锁
+         2. 释放锁是在调用：unparkSuccessor
+      8. 当parkAndCheckInterrupt返回true
+         1. 表明是调用currentThread.interrupted()打断的线程休眠，设置interrupted=true，重复步骤4.1直到前一个线程释放锁，并唤醒该线程
+   5. acquireQueued返回true表明当前线程时被中断过的，重新设置当前线程的中断位selfInterrupt
+      1. 为啥要返回true时需要重新设置线程的中断标志位，因为acquireQueued退出时保证了线程的中断位是被标记为false的，但是在步骤4.7时有可能线程被中断过，故需要重新设置标志位
+2. release
+   1. 先通过模板tryRelease()尝试释放锁
+   2. tryAcquire返回false表明当前线程在释放重入锁
+   3. tryAcquire返回true
+   4. 调用unparkSuccessor释放下一个阻塞的线程所在的节点（此处同样需要过滤掉那些已被取消了的节点）
+#独占锁允许被中断
+1. acquireInterruptibly()
+   1. 先判断当前的中断位，若true表明该线程在获取锁时就被中断了，不需要尝试锁了直接报错
+   2. 当前线程还未被中断，调用模板方法：tryAcquire()尝试获取锁
+   3. tryAcquire返回false，有多线程竞争锁，此时竞争锁失败的线程需要休眠
+   4. 调用doAcquireInterruptibly()方法将线程睡眠
+      1. addWaiter(Node.EXCLUSIVE)采用尾插入法将线程插入到阻塞双向链表中
+      2. 先判断当前节点的prev节点是否为head节点
+      3. 若为head&&tryAcquire()获取锁成功，这样设计的目的有可能获得前一个获得锁的线程此时已经释放锁，获取锁成功，移除头部节点，并将当前节点设置为头部节点
+      4. 不为head节点或为（prev==head但是锁还没被前一个线程释放）调用shouldParkAfterFailedAcquire
+         1. prev.waitStatus==-1:表示后续的一个节点需要被休眠，返回true
+         2. prev.waitStatus > 0(prev.waitStatus == 1)：表示上一个节点是取消的节点，此时需要将这种节点从链表中移除,放回false
+         3. prev.waitStatus==0:CAS设置prev.waitStatus==-1,返回false
+      5. shouldParkAfterFailedAcquire返回false重复调用步骤4.1
+         4. 确保当前节点的prev.waitStatus=-1且prev.next=当前节点，(此处需要过滤掉那些被取消的节点)
+      6. shouldParkAfterFailedAcquire返回true，调用parkAndCheckInterrupt休眠线程
+      7. 调用parkAndCheckInterrupt进入休眠
+         1. LockSuport.park(currentThread)休眠当前线程,终止当前线程的休眠如下两种方式：
+            1. LockSuport.unpark(currentThread)
+            2. currentThread.interrupted()
+         2. 调用Thread.interrupted()返回当前线程中断标志位，且清空当前线程的中断标志位
+      8. 当parkAndCheckInterrupt休眠结束，且线程的中断标志位为false
+         1. 调用LockSuport.unpark让线程退出的休眠，重复步骤4.1步骤，走到步骤4.2时，就会发现条件成立，即该线程获取到了锁
+         2. 释放锁是在调用：unparkSuccessor
+      9. 当parkAndCheckInterrupt休眠结束，且线程的中断标志位为true
+         1. 此处退出休眠是通过：t.interrupted此时需要抛出异常
+      10. 当parkAndCheckInterrupt抛出异常时，调用：cancelAcquire()处理异常的节点
+          1. 过滤那些被取消的节点
+          2. 设置当前节点.waitStatus=1
+          3. currentNode==tail,设置tail=current.prevNode，且tail.next=null
+          4. currentNode!=tail
+             1. currentNode.prev==head，此时调用unparkSuccessor释放后续需要被唤醒的阻塞线程
+             2. currentNode.prev!= && prev.waitStatus=-1 && prev.thread!=null,将currentNode.prev.next指向node.next(该节点的后续节点是需要被唤醒的)
+             3. currentNode.prev!= && prev.waitStatus<=0时CAS设置prev.waitStatus=-1 && prev.thread!=null,将currentNode.prev.next指向node.next(该节点的后续节点是需要被唤醒的)
+2. release()过程与上面一样
+#共享锁不允许中断
+1. acquireShared()
+   1. tryAcquireShared(1)调用模板返回尝试获取共享锁的数值，即尝试对AQS中的status状态进行CAS-1，并返回当前status的数值
+      1. 当status<=0时，tryAcquireShared(1)不操作status状态，直接返回-1
+   2. tryAcquireShared(1)<=0
+   3. 调用doAcquireShared()
+      1. addWaiter(Node.SHARED)尾插入法将当前线程插入到双向链表中，并标识插入的这个线程为共享节点
+         1. 如果区分这个节点是共享阻塞节点和独占阻塞节点，是通过Node中的waitNode节点是否为空来标识的
+      2. 当前sharedNode.prev==head时，重新获取tryAcquireShared(1)>=0时，表明上一个获得共享锁的线程释放锁此时status=0
+         1. setHeadAndPropagate设置当前节点为头节点且头结点的状态或者status变量>0时唤醒该节点的下一个节点
+         2. 这里有个bug：当有一个线程刚好调用完tryReleaseShared()将status=1，此时该线程调用setHeadAndPropagate且将链表中的头结点设置为当前节点时
+         3. 此时切换到释放线程去执行doReleaseShared()时会释放掉当前线程的下一个节点，会将不该唤醒的节点唤醒。
+      3. tryAcquireShared(1)<0时，未获取到锁，设置当前节点上一个节点.waitStatus=-1，再重新执行一次上面的步骤2的操作
+      4. 阻塞住
+2. releaseShared()
+   1. 将

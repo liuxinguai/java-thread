@@ -1,3 +1,4 @@
+# ThreadPoolExecuter
 1.线程池的状态
     ![](D:\work-spaces\java-thread\src\main\resources\threadpoolExecutor\status.png)
 2. execute()方法详解：
@@ -48,4 +49,25 @@
        2. SHUTDOWN/RUNNING->STOP shutdownNow
        3. STOP/SHUTDOWN->TIDYING tryTermined
        4. TIDYING->TERMINED termined
+# ScheduledThreadPoolExecutor
+1. 设置核心线程数，和最大线程数（失效的），后续加入的队列是无界队列
+2. schedule方法执行调用钩子方法decorateTask包装和装饰任务
+3. delayedExecute(RunnableScheduledFuture)
+   1. 当线程池中线程数少于核心线程数时，调用addWorker添加线程
+   2. 当线程池中的线程数=0时，调用addWorker添加线程
+4. worker线程在工作时会调用Blocking阻塞队列的take方法
+5. DelayedWorkQueue(小根堆结构).take()
+   1. 线程取出小根堆的头结点的任务，若任务为空此时该线程阻塞并释放锁
+   2. 线程取出小根堆的头结点的任务不为空
+   3. 计算该任务应该被执行的时间是否已超时，若已超时，将该任务从小根堆中移除，并将该任务交个该线程执行并唤醒后续等待获取任务的线程
+   4. 任务没有超时，当前线程判断leader线程是否为空（用于检测前面是否有线程在等待），若有，则该线程直接休眠
+   5. 若无，设置leader=currentThread，然后休眠任务数距离该任务执行还需多长的时间
+   6. 当休眠结束后，将leader=null表明当前无线程在等待获取任务
+   7. 重复步骤5.1过程周而复式
+   8. 步骤1中休眠的线程是有谁来唤醒的，是有调用offer(task)任务的线程来唤醒的
+6. 取出任务后，执行RunnableScheduledFuture.run()方法
+   1. runAndReset()
+      1. 运行该任务，当运行结束后将该任务的状态还原，比如持有该任务的线程为空、设置任务的初始状态位NEW
+      2. 设置该任务下次执行的时间
+      3. 将该任务重新放回到小根堆中
 
